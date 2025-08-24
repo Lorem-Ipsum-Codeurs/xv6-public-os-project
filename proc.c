@@ -6,6 +6,7 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "fcntl.h" // Include for scheduler policy defines
 
 struct {
   struct spinlock lock;
@@ -14,11 +15,25 @@ struct {
 
 static struct proc *initproc;
 
+// Global variable to store the current scheduling policy
+int current_scheduler = SCHED_FCFS; // Default to FCFS
+
 int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
 
 static void wakeup1(void *chan);
+
+// Simple Pseudo-Random Number Generator state
+// Using parameters from Numerical Recipes, assuming 32-bit unsigned int wraps predictably.
+static unsigned int random_seed = 1;
+
+// Simple LCG PRNG function
+// Returns a pseudo-random unsigned integer
+static unsigned int rand(void) {
+    random_seed = random_seed * 1664525 + 1013904223;
+    return random_seed;
+}
 
 void
 pinit(void)
@@ -88,6 +103,17 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->createtime = ticks;     // Set creation time
+  p->syscall_count = 0;
+  p->good_syscall_count = 0;
+  p->runtime = 0;
+  p->sleeptime = 0;
+  p->exittime = 0;
+  p->priority = 60;          // Default priority
+  p->estimated_burst = 5;    // Default burst time guess
+  p->last_burst_ticks = 0;   // Initialize last burst counter
+  p->ticks = 0;              // Initialize ticks counter
+  p->yield_request = 0;      // Initialize yield request flag
 
   release(&ptable.lock);
 
@@ -147,9 +173,7 @@ userinit(void)
   // writes to be visible, and the lock is also needed
   // because the assignment might not be atomic.
   acquire(&ptable.lock);
-
   p->state = RUNNABLE;
-
   release(&ptable.lock);
 }
 
@@ -160,7 +184,7 @@ growproc(int n)
 {
   uint sz;
   struct proc *curproc = myproc();
-
+  
   sz = curproc->sz;
   if(n > 0){
     if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
@@ -261,6 +285,9 @@ exit(void)
     }
   }
 
+  // In the exit() function before setting state to ZOMBIE
+  curproc->exittime = ticks;
+
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
   sched();
@@ -275,7 +302,7 @@ wait(void)
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
+
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
@@ -311,6 +338,51 @@ wait(void)
   }
 }
 
+int
+waitx(int *wtime, int *rtime)
+{
+  struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for exited children
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one
+        pid = p->pid;
+        *wtime = p->exittime - p->createtime - p->runtime;
+        *rtime = p->runtime;
+        // Clean up as in wait()
+        kfree(p->kstack);
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        p->state = UNUSED;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children
+    if(!havekids || curproc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children to exit
+    sleep(curproc, &ptable.lock);
+  }
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -325,33 +397,159 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+    if (current_scheduler == SCHED_FCFS) {
+      // FCFS scheduler implementation
+      struct proc *firstproc = 0;
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE)
+          continue;
+        if(firstproc == 0 || p->createtime < firstproc->createtime)
+          firstproc = p;
+      }
+      if(firstproc){
+        p = firstproc;
+        // Switch to chosen process.
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+        c->proc = 0;
+      }
+    } else if (current_scheduler == SCHED_SJF) {
+      // SJF scheduler implementation
+      struct proc *shortest_proc = 0;
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+        if(p->state != RUNNABLE)
+          continue;
+        
+        // Add debug prints to verify values
+        // cprintf("SJF considering PID %d, burst: %d\n", p->pid, p->estimated_burst);
+        
+        if(shortest_proc == 0 || p->estimated_burst < shortest_proc->estimated_burst)
+          shortest_proc = p;
+      }
+      if(shortest_proc){
+        p = shortest_proc;
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+        // Update estimated burst (assuming SJF implementation does this)
+        // p->estimated_burst = ...;
+        // p->last_burst_ticks = 0;
+        c->proc = 0;
+      }
+    } else if (current_scheduler == SCHED_BJF) {
+       // cprintf("DEBUG: BJF scheduler entered\n"); // Keep this if needed
+       struct proc *highestPriorityProc = 0;
+       struct proc *p_iter;
+       int runnable_found = 0; // Flag to check if any runnable process exists
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+       // --- Start of ACTUAL BJF logic ---
+       for(p_iter = ptable.proc; p_iter < &ptable.proc[NPROC]; p_iter++){
+         if(p_iter->state != RUNNABLE)
+           continue;
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+         runnable_found = 1;
+
+         // CHANGE: Only print for every 10th process or similar
+         if(p_iter->pid % 10 == 0) {
+           cprintf("DEBUG: BJF considering PID %d, Priority %d\n", 
+                   p_iter->pid, p_iter->priority);
+         }
+
+         // Check if this process is better than the current best
+         if (highestPriorityProc == 0 ||                                  
+             p_iter->priority < highestPriorityProc->priority ||           
+             (p_iter->priority == highestPriorityProc->priority &&        
+              p_iter->createtime < highestPriorityProc->createtime)) {    
+           highestPriorityProc = p_iter;
+           // CHANGE: Only print when actually selecting a new best
+           if(p_iter->pid % 10 == 0) {
+             cprintf("DEBUG: BJF selected new best: PID %d, prio: %d\n", 
+                    p_iter->pid, p_iter->priority);
+           }
+         }
+       }
+       // --- End of BJF logic ---
+
+       if(highestPriorityProc){ // If we found a best process
+         p = highestPriorityProc; // Assign it to 'p' for switching
+         // cprintf("DEBUG: BJF selected PID %d to run\n", p->pid); // Keep this if needed
+         c->proc = p;
+         switchuvm(p);
+         p->state = RUNNING;
+         swtch(&(c->scheduler), p->context);
+         switchkvm();
+         c->proc = 0;
+         // cprintf("DEBUG: BJF returned from PID %d\n", p->pid); // Optional
+       } else {
+         // This part should ideally only be reached if the system is idle (no runnable processes)
+         // If runnable_found is 1 here, there's still an issue in the selection logic above.
+         if (runnable_found) {
+            cprintf("DEBUG: BJF ERROR: Found runnable processes but selected none!\n");
+         } else {
+            // cprintf("DEBUG: BJF: No runnable process found this cycle.\n"); // Normal idle case
+         }
+         // Without a process to run, we might loop. Consider adding a halt or pause if truly idle.
+         // For now, it will just loop back and check again.
+       }
+    } else if (current_scheduler == SCHED_RANDOM) {
+      // Random scheduler implementation
+      struct proc *chosen_proc = 0;
+      int runnable_count = 0;
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state == RUNNABLE) {
+          runnable_count++;
+        }
+      }
+      if (runnable_count > 0) {
+        int target_idx = rand() % runnable_count;
+        int current_idx = 0;
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+          if(p->state != RUNNABLE)
+            continue;
+          if(current_idx == target_idx) {
+            chosen_proc = p;
+            break;
+          }
+          current_idx++;
+        }
+        if (chosen_proc) {
+          p = chosen_proc;
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
+          c->proc = 0;
+        }
+      }
+    } else { // Default or SCHED_RR
+      // Round Robin scheduler
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE)
+          continue;
+        // Switch to chosen process.
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+        // p->ticks = 0; // Reset ticks if your RR uses it
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+        c->proc = 0;
+      }
     }
     release(&ptable.lock);
-
   }
 }
 
@@ -385,8 +583,9 @@ sched(void)
 void
 yield(void)
 {
-  acquire(&ptable.lock);  //DOC: yieldlock
+  acquire(&ptable.lock);
   myproc()->state = RUNNABLE;
+  myproc()->yield_request = 0;  // Reset yield request after yielding
   sched();
   release(&ptable.lock);
 }
@@ -431,21 +630,28 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup runs with ptable.lock locked),
   // so it's okay to release lk.
-  if(lk != &ptable.lock){  //DOC: sleeplock0
-    acquire(&ptable.lock);  //DOC: sleeplock1
+  if(lk != &ptable.lock){
+    acquire(&ptable.lock);
     release(lk);
   }
+
+  // In the sleep() function before sched()
+  uint start_ticks = ticks;
+
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
 
   sched();
 
+  // After sched() returns
+  p->sleeptime += ticks - start_ticks;
+
   // Tidy up.
   p->chan = 0;
 
   // Reacquire original lock.
-  if(lk != &ptable.lock){  //DOC: sleeplock2
+  if(lk != &ptable.lock){
     release(&ptable.lock);
     acquire(lk);
   }
@@ -515,7 +721,6 @@ procdump(void)
   struct proc *p;
   char *state;
   uint pc[10];
-
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
@@ -531,4 +736,43 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int
+get_uncle_count(int pid)
+{
+  struct proc *p, *parent = 0, *grandparent = 0;
+  int uncle_count = 0;
+
+  acquire(&ptable.lock);
+
+  // Find process by pid
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != UNUSED && p->pid == pid){
+      parent = p->parent;
+      break;
+    }
+  }
+
+  if(parent == 0){
+    release(&ptable.lock);
+    return -1; // No such process
+  }
+
+  // Find grandparent
+  grandparent = parent->parent;
+  if(grandparent == 0){
+    release(&ptable.lock);
+    return 0; // No grandparent => no uncles
+  }
+
+  // Count grandparent's children excluding the parent
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != UNUSED && p->parent == grandparent && p != parent){
+      uncle_count++;
+    }
+  }
+
+  release(&ptable.lock);
+  return uncle_count;
 }

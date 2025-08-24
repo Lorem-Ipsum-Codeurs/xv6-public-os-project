@@ -75,15 +75,41 @@ mpconfig(struct mp **pmp)
   struct mpconf *conf;
   struct mp *mp;
 
-  if((mp = mpsearch()) == 0 || mp->physaddr == 0)
+  if((mp = mpsearch()) == 0)
     return 0;
-  conf = (struct mpconf*) P2V((uint) mp->physaddr);
+  if(mp->physaddr == 0)
+    return 0;
+    
+  uint physaddr = (uint)mp->physaddr;
+  conf = (struct mpconf*)P2V(physaddr);
+  
+  if(conf == 0)
+    return 0;
+    
+  // Check signature before accessing other fields
   if(memcmp(conf, "PCMP", 4) != 0)
     return 0;
-  if(conf->version != 1 && conf->version != 4)
+    
+  // Copy values to local variables to avoid array bounds errors
+  uchar version = conf->version;
+  if(version != 1 && version != 4)
     return 0;
-  if(sum((uchar*)conf, conf->length) != 0)
+    
+  // Use a local variable for length to avoid array bounds warning
+  ushort len = conf->length;
+  if(len < sizeof(struct mpconf))
     return 0;
+    
+  // Validate checksum with safer approach
+  uchar *addr = (uchar*)conf;
+  int checksum = 0;
+  for(int i = 0; i < len && i < 4096; i++) { // Add max length check
+    checksum += addr[i];
+  }
+  
+  if((checksum & 0xFF) != 0)
+    return 0;
+    
   *pmp = mp;
   return conf;
 }
@@ -93,44 +119,72 @@ mpinit(void)
 {
   uchar *p, *e;
   int ismp;
-  struct mp *mp;
-  struct mpconf *conf;
+  struct mp *mp = 0;
+  struct mpconf *conf = 0;
   struct mpproc *proc;
   struct mpioapic *ioapic;
 
-  if((conf = mpconfig(&mp)) == 0)
+  conf = mpconfig(&mp);
+  if(conf == 0)
     panic("Expect to run on an SMP");
+    
   ismp = 1;
-  lapic = (uint*)conf->lapicaddr;
-  for(p=(uchar*)(conf+1), e=(uchar*)conf+conf->length; p<e; ){
-    switch(*p){
-    case MPPROC:
-      proc = (struct mpproc*)p;
-      if(ncpu < NCPU) {
-        cpus[ncpu].apicid = proc->apicid;  // apicid may differ from ncpu
-        ncpu++;
+  
+  // Safe copy of the lapicaddr pointer
+  uint *lapic_addr = 0;
+  if(conf)
+    lapic_addr = (uint*)conf->lapicaddr;
+  lapic = lapic_addr;
+  
+  // Safe copy of the length
+  ushort conf_len = 0;
+  if(conf)
+    conf_len = conf->length;
+    
+  // Calculate end pointer safely
+  p = (uchar*)(conf+1);
+  e = (uchar*)conf + conf_len;
+  
+  // Only proceed if pointers are valid
+  if(p && e && p < e) {
+    while(p < e) {
+      switch(*p) {
+      case MPPROC:
+        proc = (struct mpproc*)p;
+        if(ncpu < NCPU) {
+          cpus[ncpu].apicid = proc->apicid;  // apicid may differ from ncpu
+          ncpu++;
+        }
+        p += sizeof(struct mpproc);
+        break;
+      case MPIOAPIC:
+        ioapic = (struct mpioapic*)p;
+        ioapicid = ioapic->apicno;
+        p += sizeof(struct mpioapic);
+        break;
+      case MPBUS:
+      case MPIOINTR:
+      case MPLINTR:
+        p += 8;
+        break;
+      default:
+        ismp = 0;
+        p = e;  // Exit the loop
+        break;
       }
-      p += sizeof(struct mpproc);
-      continue;
-    case MPIOAPIC:
-      ioapic = (struct mpioapic*)p;
-      ioapicid = ioapic->apicno;
-      p += sizeof(struct mpioapic);
-      continue;
-    case MPBUS:
-    case MPIOINTR:
-    case MPLINTR:
-      p += 8;
-      continue;
-    default:
-      ismp = 0;
-      break;
+      
+      // Safety check to prevent infinite loop
+      if(p > e) {
+        ismp = 0;
+        break;
+      }
     }
   }
+  
   if(!ismp)
     panic("Didn't find a suitable machine");
 
-  if(mp->imcrp){
+  if(mp && mp->imcrp){
     // Bochs doesn't support IMCR, so this doesn't run on Bochs.
     // But it would on real hardware.
     outb(0x22, 0x70);   // Select IMCR

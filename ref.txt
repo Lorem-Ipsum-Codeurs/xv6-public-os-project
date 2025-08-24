@@ -1,0 +1,66 @@
+find_digit_root
+
+Purpose: Calculates the digit root of a number (repeatedly adding digits until a single digit remains)
+Return Type: int - Returns the single-digit result
+Used for: Random seed generation
+copy_file
+
+Purpose: Copies a file from source to destination path
+Return Type: int - Returns 0 on success, -1 on failure
+Used for: Loading data for child processes
+get_uncle_count
+
+Purpose: Counts "uncle" processes (siblings of the parent process)
+Return Type: int - Returns the count of uncle processes
+Used for: Process relationship analysis
+get_process_lifetime
+
+Purpose: Calculates how long a process has existed (in timer ticks)
+Return Type: int - Returns the lifetime duration
+Used for: Process metrics and scheduling
+getnumsyscalls
+
+Purpose: Retrieves total number of system calls made by the current process
+Return Type: int - Returns the syscall count
+Used for: Process profiling
+getnumsyscallsgood
+
+Purpose: Retrieves number of successful system calls made by the process
+Return Type: int - Returns the successful syscall count
+Used for: Process profiling
+waitx
+
+Purpose: Extended version of wait() that also returns timing information
+Return Type: int - Returns PID of child or -1 on error
+Used for: Process monitoring with timing metrics
+setschedpolicy
+
+Purpose: Sets the global scheduling policy (FCFS, SJF, BJF, etc.)
+Return Type: int - Returns 0 on success, -1 on failure
+Used for: Scheduler configuration
+
+set_priority
+
+Purpose: Sets the priority value for a process
+Return Type: int - Returns 0 on success, -1 on failure
+Used for: Process scheduling control
+ps
+
+Purpose: Prints information about all processes (like Unix ps command)
+Return Type: int - Returns 0 on success
+Used for: System monitoring
+test_rr
+
+Purpose: Tests the Round Robin scheduler with controlled process creation
+Return Type: int - Returns 0 on success
+Used for: Scheduler testing
+set_burst_estimate
+
+Purpose: Sets estimated CPU burst time for SJF scheduling
+Return Type: int - Returns 0 on success, -1 on failure
+Used for: SJF scheduler optimization
+yield
+
+Purpose: Voluntarily gives up CPU to allow another process to run
+Return Type: int - Returns 0
+Used for: Cooperative multitasking

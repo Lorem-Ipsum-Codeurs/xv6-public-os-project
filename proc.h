@@ -49,6 +49,17 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  uint createtime;             // When process was created
+  uint syscall_count;          // Total number of syscalls made
+  uint good_syscall_count;     // Number of successful syscalls
+  uint runtime;                // Total time spent running on CPU
+  uint sleeptime;              // Total time spent sleeping
+  uint exittime;               // When process exited
+  int priority;                // Process priority
+  int estimated_burst;         // Estimated CPU burst time
+  int last_burst_ticks;        // Last recorded actual CPU burst
+  uint ticks;                  // Number of timer ticks the process has consumed
+  int yield_request;           // Flag to indicate process should yield
 };
 
 // Process memory is laid out contiguously, low addresses first:

@@ -442,3 +442,59 @@ sys_pipe(void)
   fd[1] = fd1;
   return 0;
 }
+
+int sys_copy_file(void) {
+  char *src, *dest;
+  struct inode *ip_src, *ip_dest;
+  int n;
+  uint off_src = 0, off_dest = 0;
+  char buf[512];
+
+  // Get arguments from user
+  if (argstr(0, &src) < 0 || argstr(1, &dest) < 0)
+    return -1;
+
+  begin_op();
+
+  // Get source inode
+  if ((ip_src = namei(src)) == 0) {
+    end_op();
+    return -1;
+  }
+  ilock(ip_src);
+
+  // Check if source is a regular file
+  if (ip_src->type != T_FILE) {
+    iunlockput(ip_src);
+    end_op();
+    return -1;
+  }
+
+  // Create destination file
+  if ((ip_dest = create(dest, T_FILE, 0, 0)) == 0) {
+    iunlockput(ip_src);
+    end_op();
+    return -1;
+  }
+
+  // Copy data
+  while (off_src < ip_src->size) {
+    n = readi(ip_src, buf, off_src, sizeof(buf));
+    if (n <= 0)
+      break;
+    if (writei(ip_dest, buf, off_dest, n) != n) {
+      iunlockput(ip_src);
+      iunlockput(ip_dest);
+      end_op();
+      return -1;
+    }
+    off_src += n;
+    off_dest += n;
+  }
+
+  iunlockput(ip_src);
+  iunlockput(ip_dest);
+  end_op();
+
+  return 0;
+}

@@ -20,3 +20,16 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
+#define SYS_find_digit_root 22 // New system call to find the digit root of a number
+#define SYS_copy_file 23 // New system call to copy a file
+#define SYS_get_uncle_count 24 // New system call to get the uncle count
+#define SYS_get_process_lifetime 25 
+#define SYS_getnumsyscalls 26
+#define SYS_getnumsyscallsgood 27
+#define SYS_waitx 28
+#define SYS_set_priority 29
+#define SYS_ps      30
+#define SYS_test_rr 31  // New system call for testing RR
+#define SYS_setschedpolicy 32 // New system call for setting scheduling policy
+#define SYS_set_burst_estimate 33
+#define SYS_yield     34

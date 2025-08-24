@@ -118,8 +118,10 @@ void            setproc(struct proc*);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(void);
+int             waitx(int*, int*);  // Add declaration for waitx
 void            wakeup(void*);
 void            yield(void);
+int             get_uncle_count(int);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
@@ -188,3 +190,6 @@ void            clearpteu(pde_t *pgdir, char *uva);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+
+int sys_copy_file(void); // New system call to copy a file

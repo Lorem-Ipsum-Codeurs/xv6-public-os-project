@@ -103,6 +103,18 @@ extern int sys_unlink(void);
 extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
+extern int sys_find_digit_root(void); // New function declaration for the digit root system call
+extern int sys_get_uncle_count(void); // New function declaration for the uncle count system call
+extern int sys_get_process_lifetime(void); // Changed function declaration for the process lifetime system call
+extern int sys_getnumsyscalls(void);
+extern int sys_getnumsyscallsgood(void);
+extern int sys_waitx(void);
+extern int sys_set_priority(void);
+extern int sys_ps(void);  // Add ps syscall
+extern int sys_test_rr(void);
+extern int sys_setschedpolicy(void); // Add extern for new syscall
+extern int sys_set_burst_estimate(void);
+extern int sys_yield(void); // Add with other extern declarations
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -126,20 +138,43 @@ static int (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_find_digit_root] sys_find_digit_root, // New system call to find the digit root
+[SYS_copy_file]    sys_copy_file, // New system call to copy a file
+[SYS_get_uncle_count] sys_get_uncle_count, // New system call to get the uncle count
+[SYS_get_process_lifetime] sys_get_process_lifetime,
+[SYS_getnumsyscalls]      sys_getnumsyscalls,
+[SYS_getnumsyscallsgood]  sys_getnumsyscallsgood,
+[SYS_waitx]    sys_waitx,
+[SYS_set_priority] sys_set_priority,
+[SYS_ps]      sys_ps,  // Add ps syscall
+[SYS_test_rr] sys_test_rr,
+[SYS_setschedpolicy] sys_setschedpolicy, // Add entry for new syscall
+[SYS_set_burst_estimate] sys_set_burst_estimate,
+[SYS_yield]    sys_yield,
 };
 
 void
 syscall(void)
 {
   int num;
+  int ret;
   struct proc *curproc = myproc();
 
   num = curproc->tf->eax;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    curproc->tf->eax = syscalls[num]();
+    if (curproc->pid > 0)
+      curproc->syscall_count++;
+    
+    ret = syscalls[num]();
+    
+    if (ret >= 0 && curproc->pid > 0)
+      curproc->good_syscall_count++;
+    
+    curproc->tf->eax = ret;
   } else {
     cprintf("%d %s: unknown sys call %d\n",
             curproc->pid, curproc->name, num);
     curproc->tf->eax = -1;
   }
 }
+

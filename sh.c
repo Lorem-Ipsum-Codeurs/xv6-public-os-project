@@ -50,8 +50,9 @@ struct backcmd {
 };
 
 int fork1(void);  // Fork but panics on failure.
-void panic(char*);
+void panic(char*) __attribute__((noreturn));
 struct cmd *parsecmd(char*);
+void runcmd(struct cmd*) __attribute__((noreturn));
 
 // Execute cmd.  Never returns.
 void
@@ -256,6 +257,7 @@ backcmd(struct cmd *subcmd)
   cmd->cmd = subcmd;
   return (struct cmd*)cmd;
 }
+
 //PAGEBREAK!
 // Parsing
 
